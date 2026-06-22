@@ -8,11 +8,15 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json package-lock.json ./
+COPY package*.json ./
+
+RUN if [ -f package-lock.json ]; then \
+      npm ci --no-audit --no-fund; \
+    else \
+      npm install --no-audit --no-fund; \
+    fi
+
 COPY prisma ./prisma/
-
-RUN npm ci
-
 COPY tsconfig.json ./
 COPY src ./src/
 
@@ -26,15 +30,19 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 
+ARG DATABASE_URL
+ARG JWT_SECRET
+ENV DATABASE_URL=$DATABASE_URL
+ENV JWT_SECRET=$JWT_SECRET
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json package-lock.json ./
-COPY prisma ./prisma/
+COPY package.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
 
 EXPOSE 8080
 
