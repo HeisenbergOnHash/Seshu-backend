@@ -26,11 +26,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 
-# Pass at build or run time (do not commit real values to git)
-ARG DATABASE_URL
-ARG JWT_SECRET
-ENV DATABASE_URL=$DATABASE_URL
-ENV JWT_SECRET=$JWT_SECRET
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl \
