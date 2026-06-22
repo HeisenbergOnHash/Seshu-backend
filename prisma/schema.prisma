@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  phone        String   @unique
+  passwordHash String
+  role         String   @default("AGENT") // ADMIN, AGENT
+  wallet       Wallet?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  borrowers    Borrower[]
+  loans        Loan[]     @relation("CreatedBy")
+}
+
+model Borrower {
+  id           String   @id @default(uuid())
+  name         String
+  phone        String   @unique
+  altPhone     String?
+  address      String?
+  idNumber     String?  // Aadhaar/PAN
+  notes        String?
+  profilePhoto String?
+  isActive     Boolean  @default(true)
+  
+  agentId      String?
+  agent        User?    @relation(fields: [agentId], references: [id])
+  
+  loans        Loan[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Loan {
+  id               String   @id @default(uuid())
+  principal        Float
+  interestRate     Float
+  interestRateType String   @default("PERCENTAGE") // PERCENTAGE, FIXED
+  interestType     String   // DAILY, WEEKLY, MONTHLY
+  startDate        DateTime
+  dueDate          DateTime?
+  status           String   @default("ACTIVE") // ACTIVE, CLOSED, FORECLOSED, DEFAULTED
+  
+  borrowerId       String
+  borrower         Borrower @relation(fields: [borrowerId], references: [id])
+  
+  createdById      String
+  createdBy        User     @relation("CreatedBy", fields: [createdById], references: [id])
+  
+  transactions     Transaction[]
+  foreclosure      Foreclosure?
+  rateLogs         InterestRateLog[]
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model InterestRateLog {
+  id               String   @id @default(uuid())
+  loanId           String
+  loan             Loan     @relation(fields: [loanId], references: [id])
+  interestRate     Float
+  interestRateType String   // PERCENTAGE, FIXED
+  effectiveDate    DateTime
+  createdAt        DateTime @default(now())
+}
+
+model Transaction {
+  id              String   @id @default(uuid())
+  type            String   // CREDIT (Principal Disbursed), DEBIT (Principal Repaid), INTEREST_COLLECTION, CHARGE
+  amount          Float
+  paymentMethod   String   // CASH, UPI, BANK_TRANSFER, CHEQUE, CARD, OTHER
+  referenceNumber String?
+  remarks         String?
+  
+  loanId          String
+  loan            Loan     @relation(fields: [loanId], references: [id])
+  
+  createdAt       DateTime @default(now())
+}
+
+model Wallet {
+  id                String   @id @default(uuid())
+  balance           Float    @default(0) // Available Cash
+  totalAssets       Float    @default(0) // Money lent out
+  totalLiabilities  Float    @default(0) // Money borrowed
+  interestEarned    Float    @default(0) 
+  totalCollections  Float    @default(0)
+  
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id])
+  
+  updatedAt         DateTime @updatedAt
+}
+
+model Foreclosure {
+  id           String   @id @default(uuid())
+  amount       Float
+  date         DateTime
+  notes        String?
+  
+  loanId       String   @unique
+  loan         Loan     @relation(fields: [loanId], references: [id])
+  
+  createdAt    DateTime @default(now())
+}
