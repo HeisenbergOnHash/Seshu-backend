@@ -1,15 +1,14 @@
 import { Request, Response } from 'express';
 import { prisma } from '../utils/prisma';
+import { RateLog } from '../services/interest.service';
 import {
-  calculateInterest,
-  getAccrualEndDate,
-  TransactionRecord,
-  InterestType
-} from '../services/interest.service';
+  buildWalletMetrics,
+  getWalletLoanScope
+} from '../services/wallet-metrics.service';
 
 export const getWallet = async (req: Request, res: Response) => {
   const userId = req.user?.userId;
-  const role = req.user?.role;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
     const wallet = await prisma.wallet.findUnique({
@@ -18,71 +17,46 @@ export const getWallet = async (req: Request, res: Response) => {
 
     if (!wallet) return res.status(404).json({ error: 'Wallet not found' });
 
-    const loanWhere = role === 'ADMIN' ? {} : { createdById: userId };
     const loans = await prisma.loan.findMany({
-      where: loanWhere,
+      where: getWalletLoanScope(userId),
       include: {
         transactions: { orderBy: { createdAt: 'asc' } },
         rateLogs: { orderBy: { effectiveDate: 'asc' } }
       }
     });
 
-    let totalAssets = 0;
-    let totalCollections = 0;
-    let interestEarned = 0;
-    const accrualEnd = getAccrualEndDate();
+    const loanInputs = loans.map((loan) => ({
+      status: loan.status,
+      principal: loan.principal,
+      interestType: loan.interestType,
+      startDate: loan.startDate,
+      transactions: loan.transactions.map((tx) => ({
+        type: tx.type,
+        amount: tx.amount,
+        createdAt: tx.createdAt
+      })),
+      rateLogs: loan.rateLogs.map((log) => ({
+        interestRate: log.interestRate,
+        interestRateType: log.interestRateType as RateLog['interestRateType'],
+        effectiveDate: log.effectiveDate
+      }))
+    }));
 
-    loans.forEach(loan => {
-      if (loan.status === 'ACTIVE' || loan.status === 'DEFAULTED') {
-        const txRecords: TransactionRecord[] = loan.transactions.map(tx => ({
-          date: tx.createdAt,
-          type: tx.type as TransactionRecord['type'],
-          amount: tx.amount
-        }));
-
-        const rateLogs = loan.rateLogs.map(log => ({
-          interestRate: log.interestRate,
-          interestRateType: log.interestRateType as 'PERCENTAGE' | 'FIXED',
-          effectiveDate: log.effectiveDate
-        }));
-
-        const interestInfo = calculateInterest(
-          loan.principal,
-          loan.interestType as InterestType,
-          loan.startDate,
-          accrualEnd,
-          txRecords,
-          rateLogs
-        );
-
-        totalAssets += interestInfo.currentOutstandingPrincipal;
-      }
-
-      loan.transactions.forEach(tx => {
-        if (tx.type === 'INTEREST_COLLECTION') {
-          interestEarned += tx.amount;
-          totalCollections += tx.amount;
-        } else if (tx.type === 'DEBIT' || tx.type === 'CHARGE') {
-          totalCollections += tx.amount;
-        }
-      });
-    });
-
-    let totalPrincipalDisbursed = 0;
-    loans.forEach(loan => {
-      totalPrincipalDisbursed += loan.principal;
-    });
-
-    const dynamicBalance = wallet.balance - totalPrincipalDisbursed + totalCollections;
+    const metrics = buildWalletMetrics(wallet.balance, loanInputs);
 
     res.json({
-      ...wallet,
-      balance: dynamicBalance,
-      totalAssets,
-      totalCollections,
-      interestEarned
+      id: wallet.id,
+      userId: wallet.userId,
+      openingBalance: wallet.balance,
+      balance: metrics.balance,
+      totalAssets: metrics.totalAssets,
+      totalCollections: metrics.totalCollections,
+      interestEarned: metrics.interestEarned,
+      totalLiabilities: 0,
+      updatedAt: wallet.updatedAt
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unexpected error';
+    res.status(500).json({ error: message });
   }
 };

@@ -4,12 +4,14 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes';
 import apiRoutes from './routes/api.routes';
 import { getJwtSecret } from './utils/env';
+import { corsOptions } from './config/cors';
 
 dotenv.config();
 getJwtSecret();
 
 const app = express();
-app.use(cors());
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 app.use('/api/auth', authRoutes);

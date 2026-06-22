@@ -73,7 +73,25 @@ If `JWT_SECRET` is missing, backend startup fails by design.
 ### 5) Dashboard + wallet
 
 - Dashboard metrics are role-scoped (AGENT own data, ADMIN global).
-- Wallet `balance` is dynamically computed server-side; use API values as source of truth.
+- Wallet is always scoped to the **authenticated user's own loans** (ADMIN does not see all agents in wallet).
+- Use wallet API values as source of truth; do not use stale DB-only wallet fields from older clients.
+
+**Wallet field meanings (updated):**
+
+| Field | UI label suggestion | Meaning |
+|-------|---------------------|---------|
+| `openingBalance` | Opening cash | Stored seed/manual cash base from DB |
+| `balance` | Available cash (estimated) | `openingBalance - disbursements + collections` |
+| `totalAssets` | Outstanding principal | Active/defaulted loan principal still out |
+| `totalCollections` | Total collections | Sum of `INTEREST_COLLECTION`, `DEBIT`, `CHARGE` |
+| `interestEarned` | Interest earned | Sum of `INTEREST_COLLECTION` only |
+| `totalLiabilities` | Reserved | Always `0` until liability tracking is implemented |
+
+**Frontend checks:**
+
+- [ ] Wallet `totalCollections` and `interestEarned` should match dashboard for the same logged-in user when both are AGENT-scoped.
+- [ ] Label `totalAssets` as outstanding principal (excludes accrued unpaid interest).
+- [ ] Do not compare ADMIN wallet totals to ADMIN dashboard totals (dashboard is global, wallet is per-user).
 
 ### 6) Date UX and params
 
@@ -248,22 +266,27 @@ All error responses use:
 ### Wallet (`/api/wallet`) - auth required
 
 - **GET** `/api/wallet`
+  - Scope: always the authenticated user's own loans (including ADMIN accounts).
   - Success shape:
     ```json
     {
       "id": "uuid",
       "userId": "uuid",
-      "balance": 125000,
-      "totalAssets": 480000,
-      "totalCollections": 95000,
-      "interestEarned": 32000,
+      "openingBalance": 50000,
+      "balance": 40200,
+      "totalAssets": 10000,
+      "totalCollections": 200,
+      "interestEarned": 200,
       "totalLiabilities": 0,
       "updatedAt": "ISO"
     }
     ```
   - Notes:
-    - `balance` returned is dynamic (computed), not raw stored value
-  - Errors: `404` wallet not found, `500` unexpected runtime error
+    - `balance` is computed from opening cash, loan disbursements (`CREDIT` or loan principal), and collections
+    - `totalAssets` is outstanding principal on `ACTIVE`/`DEFAULTED` loans only
+    - `totalCollections` and `interestEarned` use the same aggregation rules as dashboard (for the user's own loans)
+    - `totalLiabilities` is returned as `0` (not a live liability ledger yet)
+  - Errors: `404` wallet not found, `401` unauthorized, `500` unexpected runtime error
 
 ### Reports (`/api/reports`)
 
@@ -377,8 +400,11 @@ All error responses use:
 
 ### Wallet and dashboard
 
-- [ ] Wallet computed numbers match expected portfolio state
-- [ ] Dashboard values are role-scoped correctly
+- [ ] AGENT: wallet `totalCollections` and `interestEarned` match dashboard for same user
+- [ ] AGENT: wallet `totalAssets` matches sum of outstanding principal on ACTIVE/DEFAULTED loans
+- [ ] AGENT: wallet `balance` moves correctly after `DEBIT` repayment and `INTEREST_COLLECTION`
+- [ ] ADMIN: dashboard remains global while wallet remains per-user (do not expect matching totals)
+- [ ] Foreclosed loans no longer contribute to `totalAssets` but collections still affect `balance`
 
 ### Dates
 

@@ -2,17 +2,19 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDashboardStats = void 0;
 const prisma_1 = require("../utils/prisma");
+const wallet_metrics_service_1 = require("../services/wallet-metrics.service");
 const getDashboardStats = async (req, res) => {
     const role = req.user?.role;
     const userId = req.user?.userId;
-    const loanWhere = role === 'ADMIN' ? {} : { createdById: userId };
-    const txWhere = role === 'ADMIN' ? {} : { loan: { createdById: userId } };
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    const loanWhere = (0, wallet_metrics_service_1.getDashboardLoanScope)(role ?? 'AGENT', userId);
+    const txWhere = { loan: loanWhere };
     const loans = await prisma_1.prisma.loan.findMany({ where: loanWhere });
-    const activeLoans = loans.filter(l => l.status === 'ACTIVE').length;
+    const activeLoans = loans.filter((l) => l.status === 'ACTIVE').length;
     const totalPrincipal = loans.reduce((acc, l) => acc + l.principal, 0);
     const transactions = await prisma_1.prisma.transaction.findMany({ where: txWhere });
-    const totalCollections = transactions.filter(t => t.type !== 'CREDIT').reduce((acc, t) => acc + t.amount, 0);
-    const interestEarned = transactions.filter(t => t.type === 'INTEREST_COLLECTION').reduce((acc, t) => acc + t.amount, 0);
+    const { totalCollections, interestEarned } = (0, wallet_metrics_service_1.aggregateTransactionMetrics)(transactions);
     res.json({
         totalLoans: loans.length,
         activeLoans,
