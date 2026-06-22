@@ -14,7 +14,6 @@ dotenv_1.default.config();
 (0, env_1.getJwtSecret)();
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)(cors_2.corsOptions));
-app.options('*', (0, cors_1.default)(cors_2.corsOptions));
 app.use(express_1.default.json());
 app.use('/api/auth', auth_routes_1.default);
 app.use('/api', api_routes_1.default);
