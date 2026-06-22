@@ -8,13 +8,9 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package*.json ./
+COPY package.json ./
 
-RUN if [ -f package-lock.json ]; then \
-      npm ci --no-audit --no-fund; \
-    else \
-      npm install --no-audit --no-fund; \
-    fi
+RUN npm install --no-audit --no-fund
 
 COPY prisma ./prisma/
 COPY tsconfig.json ./
