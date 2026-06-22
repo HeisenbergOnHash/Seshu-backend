@@ -1,113 +1,224 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.calculateInterest = void 0;
-const dayjs_1 = __importDefault(require("dayjs"));
-const calculateInterest = (principal, type, startDate, endDate, transactions, rateLogs) => {
-    // Sort transactions by date
+exports.parseCalendarDate = exports.calculateRunningBalances = exports.calculateInterest = exports.calculateTermDays = exports.getAccrualEndDate = void 0;
+const dates_1 = require("../utils/dates");
+Object.defineProperty(exports, "parseCalendarDate", { enumerable: true, get: function () { return dates_1.parseCalendarDate; } });
+const roundAmount = (value) => Math.round(value * 1000) / 1000;
+const DEFAULT_RATE_LOG = {
+    interestRate: 0,
+    interestRateType: 'FIXED'
+};
+const getAccrualEndDate = (asOf) => {
+    return (0, dates_1.toCalendarDate)(asOf ?? new Date()).toDate();
+};
+exports.getAccrualEndDate = getAccrualEndDate;
+const calculateTermDays = (startDate, dueDate) => {
+    if (!dueDate)
+        return null;
+    return (0, dates_1.calendarDaysDiff)(startDate, dueDate);
+};
+exports.calculateTermDays = calculateTermDays;
+const buildResult = (principal, state, loanStart, finalDate) => {
+    const currentOutstandingInterest = state.totalInterestAccrued - state.totalInterestCollected;
+    return {
+        totalPrincipal: principal,
+        totalInterestAccrued: roundAmount(state.totalInterestAccrued),
+        totalInterestCollected: roundAmount(state.totalInterestCollected),
+        totalCharges: roundAmount(state.totalCharges),
+        currentOutstandingPrincipal: roundAmount(state.currentPrincipal),
+        currentOutstandingInterest: roundAmount(currentOutstandingInterest),
+        totalPayable: roundAmount(state.currentPrincipal + currentOutstandingInterest + state.totalCharges),
+        daysElapsed: finalDate.diff(loanStart, 'day')
+    };
+};
+const toBalance = (state, interestDays) => {
+    const interest = state.totalInterestAccrued - state.totalInterestCollected;
+    return {
+        principal: roundAmount(state.currentPrincipal),
+        interest: roundAmount(interest),
+        charges: roundAmount(state.totalCharges),
+        totalPayable: roundAmount(state.currentPrincipal + interest + state.totalCharges),
+        interestDays
+    };
+};
+const simulateInterest = (principal, type, startDate, endDate, transactions, rateLogs) => {
     const sortedTx = [...transactions].sort((a, b) => a.date.getTime() - b.date.getTime());
-    // Sort rate logs by effective date
     const sortedRates = [...rateLogs].sort((a, b) => a.effectiveDate.getTime() - b.effectiveDate.getTime());
-    let currentPrincipal = principal;
-    let totalInterestAccrued = 0;
-    let totalInterestCollected = 0;
-    let lastDate = (0, dayjs_1.default)(startDate).startOf('day');
-    const finalDate = (0, dayjs_1.default)(endDate).startOf('day');
-    // Helper to get active rate config for a given date
+    const state = {
+        currentPrincipal: principal,
+        totalInterestAccrued: 0,
+        totalInterestCollected: 0,
+        totalCharges: 0
+    };
+    const loanStart = (0, dates_1.toCalendarDate)(startDate);
+    let lastDate = loanStart;
+    const finalDate = (0, dates_1.toCalendarDate)(endDate);
+    const effectiveRates = sortedRates.length > 0
+        ? sortedRates
+        : [{ ...DEFAULT_RATE_LOG, effectiveDate: startDate }];
     const getActiveRate = (date) => {
-        // Find the latest rate log whose effective date is <= the given date
-        // Fallback to the first rate log if none are strictly before
-        let activeLog = sortedRates[0];
-        for (const log of sortedRates) {
-            if ((0, dayjs_1.default)(log.effectiveDate).startOf('day').isAfter(date.startOf('day'))) {
+        let activeLog = effectiveRates[0];
+        for (const log of effectiveRates) {
+            if ((0, dates_1.toCalendarDate)(log.effectiveDate).isAfter(date))
                 break;
-            }
             activeLog = log;
         }
         return activeLog;
     };
-    // Helper to calculate daily interest amount for a specific principal, rate config, and duration
-    const calcPeriodInterest = (principalAmt, daysDiff, date) => {
+    const calcDailyInterest = (principalAmt, date) => {
         const rateLog = getActiveRate(date);
         const { interestRate, interestRateType } = rateLog;
-        let dailyAmount = 0;
         if (interestRateType === 'PERCENTAGE') {
             let dailyRateDecimal = 0;
-            if (type === 'DAILY') {
+            if (type === 'DAILY')
                 dailyRateDecimal = interestRate / 100;
-            }
-            else if (type === 'WEEKLY') {
+            else if (type === 'WEEKLY')
                 dailyRateDecimal = (interestRate / 100) / 7;
-            }
-            else if (type === 'MONTHLY') {
+            else if (type === 'MONTHLY')
                 dailyRateDecimal = (interestRate / 100) / 30;
-            }
-            dailyAmount = principalAmt * dailyRateDecimal;
+            return principalAmt * dailyRateDecimal;
         }
-        else if (interestRateType === 'FIXED') {
-            if (type === 'DAILY') {
-                dailyAmount = interestRate;
-            }
-            else if (type === 'WEEKLY') {
-                dailyAmount = interestRate / 7;
-            }
-            else if (type === 'MONTHLY') {
-                dailyAmount = interestRate / 30;
-            }
-        }
-        return dailyAmount * daysDiff;
+        if (type === 'DAILY')
+            return interestRate;
+        if (type === 'WEEKLY')
+            return interestRate / 7;
+        if (type === 'MONTHLY')
+            return interestRate / 30;
+        return 0;
     };
-    // Iterate over transactions to calculate interest between events
-    for (const tx of sortedTx) {
-        const txDate = (0, dayjs_1.default)(tx.date).startOf('day');
-        if (txDate.isAfter(finalDate)) {
-            break; // Ignore transactions after the calculation end date
+    const accrueForDays = (fromDate, toDate) => {
+        const daysDiff = toDate.diff(fromDate, 'day');
+        if (daysDiff <= 0)
+            return;
+        for (let i = 0; i < daysDiff; i++) {
+            const currentDate = fromDate.add(i, 'day');
+            if (currentDate.isAfter(finalDate))
+                break;
+            state.totalInterestAccrued += calcDailyInterest(state.currentPrincipal, currentDate);
         }
-        if (txDate.isBefore(startDate)) {
-            continue; // Normally shouldn't happen if transactions start after loan
-        }
-        const daysDiff = txDate.diff(lastDate, 'day');
-        if (daysDiff > 0) {
-            // Rather than calculating the entire chunk at once, we technically should check if a rate change happened IN BETWEEN lastDate and txDate.
-            // For precision, we step day by day between lastDate and txDate to accrue correctly based on exact active rates.
-            for (let i = 0; i < daysDiff; i++) {
-                const currentDate = lastDate.add(i, 'day');
-                totalInterestAccrued += calcPeriodInterest(currentPrincipal, 1, currentDate);
-            }
-            lastDate = txDate;
-        }
-        // Apply transaction
+    };
+    const applyTransaction = (tx) => {
         if (tx.type === 'DEBIT') {
-            currentPrincipal -= tx.amount;
-            if (currentPrincipal < 0)
-                currentPrincipal = 0;
+            state.currentPrincipal -= tx.amount;
+            if (state.currentPrincipal < 0)
+                state.currentPrincipal = 0;
         }
         else if (tx.type === 'CREDIT') {
-            currentPrincipal += tx.amount;
+            state.currentPrincipal += tx.amount;
         }
         else if (tx.type === 'INTEREST_COLLECTION') {
-            totalInterestCollected += tx.amount;
+            state.totalInterestCollected += tx.amount;
         }
-    }
-    // Accrue interest from last transaction to end date
-    const daysDiffFinal = finalDate.diff(lastDate, 'day');
-    if (daysDiffFinal > 0) {
-        for (let i = 0; i < daysDiffFinal; i++) {
-            const currentDate = lastDate.add(i, 'day');
-            totalInterestAccrued += calcPeriodInterest(currentPrincipal, 1, currentDate);
+        else if (tx.type === 'CHARGE') {
+            state.totalCharges += tx.amount;
         }
-    }
-    const currentOutstandingInterest = totalInterestAccrued - totalInterestCollected;
-    return {
-        totalPrincipal: principal,
-        totalInterestAccrued: Math.round(totalInterestAccrued),
-        totalInterestCollected,
-        currentOutstandingPrincipal: currentPrincipal,
-        currentOutstandingInterest: Math.round(currentOutstandingInterest),
-        totalPayable: Math.round(currentPrincipal + currentOutstandingInterest),
-        daysElapsed: (0, dayjs_1.default)(endDate).diff((0, dayjs_1.default)(startDate).startOf('day'), 'day')
     };
+    for (const tx of sortedTx) {
+        const txDate = (0, dates_1.toCalendarDate)(tx.date);
+        if (txDate.isBefore(loanStart))
+            continue;
+        const accrueUntil = txDate.isAfter(finalDate) ? finalDate : txDate;
+        if (!lastDate.isAfter(finalDate)) {
+            accrueForDays(lastDate, accrueUntil);
+            lastDate = accrueUntil;
+        }
+        applyTransaction(tx);
+    }
+    if (!lastDate.isAfter(finalDate)) {
+        accrueForDays(lastDate, finalDate);
+    }
+    return buildResult(principal, state, loanStart, finalDate);
+};
+const calculateInterest = (principal, type, startDate, endDate, transactions, rateLogs) => {
+    return simulateInterest(principal, type, startDate, endDate, transactions, rateLogs);
 };
 exports.calculateInterest = calculateInterest;
+const calculateRunningBalances = (principal, type, startDate, transactions, rateLogs, dueDate) => {
+    if (transactions.length === 0)
+        return [];
+    const sortedTx = transactions;
+    const sortedRates = [...rateLogs].sort((a, b) => a.effectiveDate.getTime() - b.effectiveDate.getTime());
+    const state = {
+        currentPrincipal: principal,
+        totalInterestAccrued: 0,
+        totalInterestCollected: 0,
+        totalCharges: 0
+    };
+    const loanStart = (0, dates_1.toCalendarDate)(startDate);
+    const dueDateCal = dueDate ? (0, dates_1.toCalendarDate)(dueDate) : null;
+    let lastDate = loanStart;
+    let totalAccruedDays = 0;
+    const snapshots = [];
+    const effectiveRates = sortedRates.length > 0
+        ? sortedRates
+        : [{ ...DEFAULT_RATE_LOG, effectiveDate: startDate }];
+    const getActiveRate = (date) => {
+        let activeLog = effectiveRates[0];
+        for (const log of effectiveRates) {
+            if ((0, dates_1.toCalendarDate)(log.effectiveDate).isAfter(date))
+                break;
+            activeLog = log;
+        }
+        return activeLog;
+    };
+    const calcDailyInterest = (principalAmt, date) => {
+        const rateLog = getActiveRate(date);
+        const { interestRate, interestRateType } = rateLog;
+        if (interestRateType === 'PERCENTAGE') {
+            let dailyRateDecimal = 0;
+            if (type === 'DAILY')
+                dailyRateDecimal = interestRate / 100;
+            else if (type === 'WEEKLY')
+                dailyRateDecimal = (interestRate / 100) / 7;
+            else if (type === 'MONTHLY')
+                dailyRateDecimal = (interestRate / 100) / 30;
+            return principalAmt * dailyRateDecimal;
+        }
+        if (type === 'DAILY')
+            return interestRate;
+        if (type === 'WEEKLY')
+            return interestRate / 7;
+        if (type === 'MONTHLY')
+            return interestRate / 30;
+        return 0;
+    };
+    const accrueForDays = (fromDate, toDate) => {
+        const daysDiff = toDate.diff(fromDate, 'day');
+        if (daysDiff <= 0)
+            return 0;
+        for (let i = 0; i < daysDiff; i++) {
+            state.totalInterestAccrued += calcDailyInterest(state.currentPrincipal, fromDate.add(i, 'day'));
+        }
+        return daysDiff;
+    };
+    for (const tx of sortedTx) {
+        const txDate = (0, dates_1.toCalendarDate)(tx.date);
+        if (!txDate.isBefore(loanStart)) {
+            let accrueUntil = txDate;
+            if (dueDateCal && dueDateCal.isBefore(txDate)) {
+                accrueUntil = dueDateCal;
+            }
+            if (!lastDate.isAfter(accrueUntil)) {
+                totalAccruedDays += accrueForDays(lastDate, accrueUntil);
+                lastDate = accrueUntil;
+            }
+        }
+        if (tx.type === 'DEBIT') {
+            state.currentPrincipal -= tx.amount;
+            if (state.currentPrincipal < 0)
+                state.currentPrincipal = 0;
+        }
+        else if (tx.type === 'CREDIT') {
+            state.currentPrincipal += tx.amount;
+        }
+        else if (tx.type === 'INTEREST_COLLECTION') {
+            state.totalInterestCollected += tx.amount;
+        }
+        else if (tx.type === 'CHARGE') {
+            state.totalCharges += tx.amount;
+        }
+        snapshots.push(toBalance(state, totalAccruedDays));
+    }
+    return snapshots;
+};
+exports.calculateRunningBalances = calculateRunningBalances;

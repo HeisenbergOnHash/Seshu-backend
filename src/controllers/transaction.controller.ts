@@ -1,5 +1,11 @@
 import { Request, Response } from 'express';
 import { prisma } from '../utils/prisma';
+import {
+  ensureAuthenticatedUser,
+  ensureLoanAccessible,
+  ensureTransactionOwnership,
+  handleHttpError
+} from '../utils/access-control';
 
 export const getTransactions = async (req: Request, res: Response) => {
   const role = req.user?.role;
@@ -33,6 +39,9 @@ export const createTransaction = async (req: Request, res: Response) => {
   const { loanId, type, amount, paymentMethod, referenceNumber, remarks, date } = req.body;
 
   try {
+    const user = ensureAuthenticatedUser(req.user);
+    await ensureLoanAccessible(user, loanId);
+
     const transaction = await prisma.transaction.create({
       data: {
         loanId, 
@@ -45,16 +54,19 @@ export const createTransaction = async (req: Request, res: Response) => {
       }
     });
     res.json(transaction);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    const { statusCode, message } = handleHttpError(err, 400);
+    res.status(statusCode).json({ error: message });
   }
 };
 
 export const updateTransaction = async (req: Request, res: Response) => {
-  const id = req.params.id as string;
-  const { type, date, amount } = req.body;
-
   try {
+    const id = req.params.id as string;
+    const user = ensureAuthenticatedUser(req.user);
+    const { type, date, amount } = req.body;
+    await ensureTransactionOwnership(user, id);
+
     const transaction = await prisma.transaction.update({
       where: { id },
       data: {
@@ -64,7 +76,8 @@ export const updateTransaction = async (req: Request, res: Response) => {
       }
     });
     res.json(transaction);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    const { statusCode, message } = handleHttpError(err, 400);
+    res.status(statusCode).json({ error: message });
   }
 };

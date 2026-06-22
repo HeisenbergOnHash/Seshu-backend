@@ -3,8 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes';
 import apiRoutes from './routes/api.routes';
+import { getJwtSecret } from './utils/env';
 
 dotenv.config();
+getJwtSecret();
 
 const app = express();
 app.use(cors());

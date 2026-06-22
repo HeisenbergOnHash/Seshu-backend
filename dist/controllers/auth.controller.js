@@ -7,6 +7,7 @@ exports.getMe = exports.login = void 0;
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const prisma_1 = require("../utils/prisma");
+const env_1 = require("../utils/env");
 const login = async (req, res) => {
     const { phone, password } = req.body;
     if (!phone || !password) {
@@ -20,7 +21,7 @@ const login = async (req, res) => {
     if (!valid) {
         return res.status(401).json({ error: 'Invalid credentials' });
     }
-    const token = jsonwebtoken_1.default.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET || 'supersecretjwtkey', { expiresIn: '7d' });
+    const token = jsonwebtoken_1.default.sign({ userId: user.id, role: user.role }, (0, env_1.getJwtSecret)(), { expiresIn: '7d' });
     res.json({
         token,
         user: {

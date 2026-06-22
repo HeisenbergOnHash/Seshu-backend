@@ -9,6 +9,11 @@ import {
   TransactionRecord,
   InterestType
 } from '../services/interest.service';
+import {
+  ensureAuthenticatedUser,
+  ensureLoanOwnership,
+  handleHttpError
+} from '../utils/access-control';
 
 export const getLoans = async (req: Request, res: Response) => {
   const role = req.user?.role;
@@ -25,9 +30,9 @@ export const getLoans = async (req: Request, res: Response) => {
 
 export const createLoan = async (req: Request, res: Response) => {
   const { borrowerId, principal, interestRate, interestRateType, interestType, startDate, dueDate } = req.body;
-  const userId = req.user?.userId;
 
   try {
+    const user = ensureAuthenticatedUser(req.user);
     const loan = await prisma.loan.create({
       data: {
         principal: parseFloat(principal),
@@ -37,7 +42,7 @@ export const createLoan = async (req: Request, res: Response) => {
         startDate: parseCalendarDate(startDate),
         dueDate: dueDate ? parseCalendarDate(dueDate) : null,
         borrowerId,
-        createdById: userId!,
+        createdById: user.userId,
         rateLogs: {
           create: {
             interestRate: parseFloat(interestRate),
@@ -48,16 +53,20 @@ export const createLoan = async (req: Request, res: Response) => {
       }
     });
     res.json(loan);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    const { statusCode, message } = handleHttpError(err, 400);
+    res.status(statusCode).json({ error: message });
   }
 };
 
 export const updateLoanDates = async (req: Request, res: Response) => {
-  const id = req.params.id as string;
-  const { startDate, dueDate } = req.body;
-
   try {
+    const id = req.params.id as string;
+    const user = ensureAuthenticatedUser(req.user);
+    const { startDate, dueDate } = req.body;
+
+    await ensureLoanOwnership(user, id);
+
     const loan = await prisma.loan.update({
       where: { id },
       data: {
@@ -81,76 +90,88 @@ export const updateLoanDates = async (req: Request, res: Response) => {
     }
     
     res.json(loan);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    const { statusCode, message } = handleHttpError(err, 400);
+    res.status(statusCode).json({ error: message });
   }
 };
 
 export const getLoanDetails = async (req: Request, res: Response) => {
-  const id = req.params.id as string;
-  const loan = await prisma.loan.findUnique({
-    where: { id: id },
-    include: { 
-      transactions: { orderBy: { createdAt: 'asc' } }, 
-      borrower: true,
-      rateLogs: { orderBy: { effectiveDate: 'asc' } }
-    }
-  });
-  if (!loan) return res.status(404).json({ error: 'Not found' });
+  try {
+    const id = req.params.id as string;
+    const user = ensureAuthenticatedUser(req.user);
+    await ensureLoanOwnership(user, id);
 
-  // Map transactions to the format expected by the interest engine
-  const txRecords: TransactionRecord[] = loan.transactions.map(tx => ({
-    date: tx.createdAt,
-    type: tx.type as 'CREDIT' | 'DEBIT' | 'INTEREST_COLLECTION' | 'CHARGE',
-    amount: tx.amount
-  }));
+    const loan = await prisma.loan.findUnique({
+      where: { id: id },
+      include: { 
+        transactions: { orderBy: { createdAt: 'asc' } }, 
+        borrower: true,
+        rateLogs: { orderBy: { effectiveDate: 'asc' } }
+      }
+    });
+    if (!loan) return res.status(404).json({ error: 'Not found' });
 
-  const rateLogs = loan.rateLogs.map(log => ({
-    interestRate: log.interestRate,
-    interestRateType: log.interestRateType as 'PERCENTAGE' | 'FIXED',
-    effectiveDate: log.effectiveDate
-  }));
+    // Map transactions to the format expected by the interest engine
+    const txRecords: TransactionRecord[] = loan.transactions.map(tx => ({
+      date: tx.createdAt,
+      type: tx.type as 'CREDIT' | 'DEBIT' | 'INTEREST_COLLECTION' | 'CHARGE',
+      amount: tx.amount
+    }));
 
-  const asOf = req.query.asOf as string | undefined;
-  const endDate = asOf ? getAccrualEndDate(new Date(asOf)) : getAccrualEndDate();
-  const termDays = calculateTermDays(loan.startDate, loan.dueDate);
+    const rateLogs = loan.rateLogs.map(log => ({
+      interestRate: log.interestRate,
+      interestRateType: log.interestRateType as 'PERCENTAGE' | 'FIXED',
+      effectiveDate: log.effectiveDate
+    }));
 
-  const interestInfo = calculateInterest(
-    loan.principal,
-    loan.interestType as InterestType,
-    loan.startDate,
-    endDate,
-    txRecords,
-    rateLogs
-  );
+    const asOf = req.query.asOf as string | undefined;
+    const endDate = asOf ? getAccrualEndDate(new Date(asOf)) : getAccrualEndDate();
+    const termDays = calculateTermDays(loan.startDate, loan.dueDate);
 
-  const runningBalances = calculateRunningBalances(
-    loan.principal,
-    loan.interestType as InterestType,
-    loan.startDate,
-    txRecords,
-    rateLogs,
-    loan.dueDate
-  );
+    const interestInfo = calculateInterest(
+      loan.principal,
+      loan.interestType as InterestType,
+      loan.startDate,
+      endDate,
+      txRecords,
+      rateLogs
+    );
 
-  const transactionsWithBalances = loan.transactions.map((tx, index) => ({
-    ...tx,
-    balanceAfterTx: {
-      principal: runningBalances[index]?.principal ?? loan.principal,
-      interest: runningBalances[index]?.interest ?? 0,
-      charges: runningBalances[index]?.charges ?? 0,
-      interestDays: runningBalances[index]?.interestDays ?? 0
-    }
-  }));
+    const runningBalances = calculateRunningBalances(
+      loan.principal,
+      loan.interestType as InterestType,
+      loan.startDate,
+      txRecords,
+      rateLogs,
+      loan.dueDate
+    );
 
-  res.json({ ...loan, transactions: transactionsWithBalances, interestInfo, termDays });
+    const transactionsWithBalances = loan.transactions.map((tx, index) => ({
+      ...tx,
+      balanceAfterTx: {
+        principal: runningBalances[index]?.principal ?? loan.principal,
+        interest: runningBalances[index]?.interest ?? 0,
+        charges: runningBalances[index]?.charges ?? 0,
+        interestDays: runningBalances[index]?.interestDays ?? 0
+      }
+    }));
+
+    res.json({ ...loan, transactions: transactionsWithBalances, interestInfo, termDays });
+  } catch (err: unknown) {
+    const { statusCode, message } = handleHttpError(err);
+    res.status(statusCode).json({ error: message });
+  }
 };
 
 export const updateLoanRate = async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { interestRate, interestRateType, effectiveDate } = req.body;
-
   try {
+    const { id } = req.params;
+    const user = ensureAuthenticatedUser(req.user);
+    const { interestRate, interestRateType, effectiveDate } = req.body;
+
+    await ensureLoanOwnership(user, id as string);
+
     const rateLog = await prisma.interestRateLog.create({
       data: {
         loanId: id as string,
@@ -170,16 +191,20 @@ export const updateLoanRate = async (req: Request, res: Response) => {
     });
 
     res.json(rateLog);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    const { statusCode, message } = handleHttpError(err, 400);
+    res.status(statusCode).json({ error: message });
   }
 };
 
 export const forecloseLoan = async (req: Request, res: Response) => {
-  const id = req.params.id as string;
-  const { notes } = req.body;
-
   try {
+    const id = req.params.id as string;
+    const user = ensureAuthenticatedUser(req.user);
+    const { notes } = req.body;
+
+    await ensureLoanOwnership(user, id);
+
     const loan = await prisma.loan.findUnique({
       where: { id },
       include: {
@@ -265,7 +290,8 @@ export const forecloseLoan = async (req: Request, res: Response) => {
     });
 
     res.json({ message: 'Loan foreclosed successfully', totalPayable });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    const { statusCode, message } = handleHttpError(err, 400);
+    res.status(statusCode).json({ error: message });
   }
 };

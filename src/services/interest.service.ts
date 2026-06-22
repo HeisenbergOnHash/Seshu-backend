@@ -45,6 +45,10 @@ interface SimulationState {
 }
 
 const roundAmount = (value: number) => Math.round(value * 1000) / 1000;
+const DEFAULT_RATE_LOG: Omit<RateLog, 'effectiveDate'> = {
+  interestRate: 0,
+  interestRateType: 'FIXED'
+};
 
 export const getAccrualEndDate = (asOf?: Date): Date => {
   return toCalendarDate(asOf ?? new Date()).toDate();
@@ -107,10 +111,13 @@ const simulateInterest = (
   const loanStart = toCalendarDate(startDate);
   let lastDate = loanStart;
   const finalDate = toCalendarDate(endDate);
+  const effectiveRates = sortedRates.length > 0
+    ? sortedRates
+    : [{ ...DEFAULT_RATE_LOG, effectiveDate: startDate }];
 
   const getActiveRate = (date: ReturnType<typeof toCalendarDate>) => {
-    let activeLog = sortedRates[0];
-    for (const log of sortedRates) {
+    let activeLog = effectiveRates[0];
+    for (const log of effectiveRates) {
       if (toCalendarDate(log.effectiveDate).isAfter(date)) break;
       activeLog = log;
     }
@@ -216,10 +223,13 @@ export const calculateRunningBalances = (
   let lastDate = loanStart;
   let totalAccruedDays = 0;
   const snapshots: TransactionBalance[] = [];
+  const effectiveRates = sortedRates.length > 0
+    ? sortedRates
+    : [{ ...DEFAULT_RATE_LOG, effectiveDate: startDate }];
 
   const getActiveRate = (date: ReturnType<typeof toCalendarDate>) => {
-    let activeLog = sortedRates[0];
-    for (const log of sortedRates) {
+    let activeLog = effectiveRates[0];
+    for (const log of effectiveRates) {
       if (toCalendarDate(log.effectiveDate).isAfter(date)) break;
       activeLog = log;
     }

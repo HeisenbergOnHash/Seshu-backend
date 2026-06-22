@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../utils/prisma';
+import { getJwtSecret } from '../utils/env';
 
 export const login = async (req: Request, res: Response) => {
   const { phone, password } = req.body;
@@ -21,7 +22,7 @@ export const login = async (req: Request, res: Response) => {
 
   const token = jwt.sign(
     { userId: user.id, role: user.role },
-    process.env.JWT_SECRET || 'supersecretjwtkey',
+    getJwtSecret(),
     { expiresIn: '7d' }
   );
 

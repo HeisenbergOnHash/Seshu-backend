@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireRole = exports.authenticate = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const env_1 = require("../utils/env");
 const authenticate = (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -12,7 +13,7 @@ const authenticate = (req, res, next) => {
     }
     const token = authHeader.split(' ')[1];
     try {
-        const payload = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET || 'supersecretjwtkey');
+        const payload = jsonwebtoken_1.default.verify(token, (0, env_1.getJwtSecret)());
         req.user = payload;
         next();
     }
